@@ -28,6 +28,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import android.os.Build
+import com.example.smsreader.data.DatabaseHelper
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 
 class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
@@ -40,7 +42,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private val logEntries = mutableStateListOf<LogEntry>()
-    
+    private lateinit var databaseHelper: DatabaseHelper
+
     private val logReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent?.getStringExtra(SmsMonitorService.EXTRA_LOG_MESSAGE)?.let { message ->
@@ -53,19 +56,23 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         checkPermissions()
         registerLogReceiver()
-        
+        databaseHelper = DatabaseHelper(this)
+
         setContent {
             SMSReaderTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    SmsMonitorScreen(
+                    MainScreen(
                         onStartMonitoring = { username, searchString ->
                             startSmsMonitoring(username, searchString)
                         },
                         onStopMonitoring = {
                             stopSmsMonitoring()
+                        },
+                        onSaveDbCredentials = { url, user, password ->
+                            databaseHelper.saveCredentials(url, user, password)
                         },
                         logEntries = logEntries
                     )
@@ -85,8 +92,7 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.READ_SMS,
             Manifest.permission.RECEIVE_SMS
         )
-        
-        // Add notification permission for Android 13+
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -124,14 +130,19 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun SmsMonitorScreen(
+fun MainScreen(
     onStartMonitoring: (String, String) -> Unit,
     onStopMonitoring: () -> Unit,
+    onSaveDbCredentials: (String, String, String) -> Unit,
     logEntries: List<LogEntry> = emptyList()
 ) {
     var username by remember { mutableStateOf("") }
     var searchString by remember { mutableStateOf("") }
     var isMonitoring by remember { mutableStateOf(false) }
+    var showDbSettings by remember { mutableStateOf(false) }
+    var dbUrl by remember { mutableStateOf("") }
+    var dbUser by remember { mutableStateOf("") }
+    var dbPassword by remember { mutableStateOf("") }
 
     Column(
         modifier = Modifier
@@ -153,18 +164,66 @@ fun SmsMonitorScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        Button(
-            onClick = {
-                if (isMonitoring) {
-                    onStopMonitoring()
-                } else {
-                    onStartMonitoring(username, searchString)
-                }
-                isMonitoring = !isMonitoring
-            },
-            modifier = Modifier.fillMaxWidth()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(if (isMonitoring) "Stop Monitoring" else "Start Monitoring")
+            Button(
+                onClick = {
+                    if (isMonitoring) {
+                        onStopMonitoring()
+                    } else {
+                        onStartMonitoring(username, searchString)
+                    }
+                    isMonitoring = !isMonitoring
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (isMonitoring) "Stop Monitoring" else "Start Monitoring")
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Button(
+                onClick = { showDbSettings = !showDbSettings },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (showDbSettings) "Hide DB Settings" else "Show DB Settings")
+            }
+        }
+
+        if (showDbSettings) {
+            OutlinedTextField(
+                value = dbUrl,
+                onValueChange = { dbUrl = it },
+                label = { Text("Database URL") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = dbUser,
+                onValueChange = { dbUser = it },
+                label = { Text("Database User") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = dbPassword,
+                onValueChange = { dbPassword = it },
+                label = { Text("Database Password") },
+                modifier = Modifier.fillMaxWidth(),
+                visualTransformation = PasswordVisualTransformation()
+            )
+
+            Button(
+                onClick = {
+                    onSaveDbCredentials(dbUrl, dbUser, dbPassword)
+                    showDbSettings = false
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Save Database Settings")
+            }
         }
 
         Text(
@@ -190,7 +249,7 @@ fun SmsMonitorScreen(
 @Composable
 fun LogEntryItem(entry: LogEntry) {
     val dateFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
-    
+
     Row(
         modifier = Modifier
             .fillMaxWidth()

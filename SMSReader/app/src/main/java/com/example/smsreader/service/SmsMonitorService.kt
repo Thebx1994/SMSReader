@@ -26,6 +26,7 @@ class SmsMonitorService : Service() {
     private var isRunning = false
     private lateinit var workManager: WorkManager
     private lateinit var notificationHelper: NotificationHelper
+    private lateinit var databaseHelper: DatabaseHelper
     private var lastProcessedSmsId: String? = null
     private var lastProcessedTimestamp: Long = 0
     private var isProcessingSms = false
@@ -36,6 +37,7 @@ class SmsMonitorService : Service() {
         super.onCreate()
         notificationHelper = NotificationHelper(this)
         workManager = WorkManager.getInstance(applicationContext)
+        databaseHelper = DatabaseHelper(applicationContext)
         startForeground()
         scheduleServiceCheck()
     }
@@ -106,7 +108,7 @@ class SmsMonitorService : Service() {
 
     private fun checkNewSms() {
         if (isProcessingSms) return  // Skip if already processing an SMS
-        
+
         try {
             val cursor = contentResolver.query(
                 Telephony.Sms.CONTENT_URI,
@@ -133,7 +135,7 @@ class SmsMonitorService : Service() {
 
                     // Set processing flag
                     isProcessingSms = true
-                    
+
                     try {
                         // Update tracking variables
                         lastProcessedSmsId = smsId
@@ -181,9 +183,9 @@ class SmsMonitorService : Service() {
                 notificationHelper.showTransactionNotification(transactionId, amount, cardId)
 
                 val voucher = VoucherData(transactionId, cardId, amount)
-                
+
                 try {
-                    DatabaseHelper.saveVoucher(voucher) { dbLog ->
+                    databaseHelper.saveVoucher(voucher) { dbLog ->
                         if (isRunning) {
                             sendLog(dbLog)
                         }
@@ -209,13 +211,13 @@ class SmsMonitorService : Service() {
     private fun createNotification(): Notification {
         val channelId = "sms_monitor_channel"
         val channelName = "SMS Monitor Service"
-        
+
         val channel = NotificationChannel(
             channelId,
             channelName,
             NotificationManager.IMPORTANCE_LOW
         )
-        
+
         val notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.createNotificationChannel(channel)
 
@@ -272,4 +274,4 @@ class SmsMonitorService : Service() {
         const val LOG_ACTION = "com.example.smsreader.LOG"
         const val EXTRA_LOG_MESSAGE = "log_message"
     }
-} 
+}
