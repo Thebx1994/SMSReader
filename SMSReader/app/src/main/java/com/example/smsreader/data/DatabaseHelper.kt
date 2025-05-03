@@ -6,8 +6,11 @@ import android.util.Log
 import kotlinx.coroutines.*
 import java.sql.DriverManager
 import java.sql.SQLException
+import androidx.work.*
+import com.example.smsreader.worker.RetryWorker
+import java.util.concurrent.TimeUnit
 
-class DatabaseHelper(context: Context) {
+class DatabaseHelper(private val context: Context) {
     companion object {
         private const val PREFS_NAME = "DatabasePrefs"
         private const val KEY_DB_URL = "db_url"
@@ -25,6 +28,7 @@ class DatabaseHelper(context: Context) {
     }
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val localDb = LocalDatabaseHelper(context)
 
     private fun getDbUrl(): String = prefs.getString(KEY_DB_URL, "") ?: ""
     private fun getDbUser(): String = prefs.getString(KEY_DB_USER, "") ?: ""
@@ -37,10 +41,47 @@ class DatabaseHelper(context: Context) {
             putString(KEY_DB_PASSWORD, password)
             apply()
         }
+        scheduleRetryWorker()
+    }
+
+    private fun scheduleRetryWorker() {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        // Schedule immediate retry worker
+        val immediateRetry = OneTimeWorkRequestBuilder<RetryWorker>()
+            .setConstraints(constraints)
+            .setBackoffCriteria(
+                BackoffPolicy.EXPONENTIAL,
+                30, // Start with 30 seconds
+                TimeUnit.SECONDS
+            )
+            .build()
+
+        // Schedule periodic retry worker for remaining items
+        val periodicRetry = PeriodicWorkRequestBuilder<RetryWorker>(
+            3, TimeUnit.MINUTES, // Run every 3 minutes
+            1, TimeUnit.MINUTES  // Flex period
+        )
+            .setConstraints(constraints)
+            .build()
+
+        WorkManager.getInstance(context).apply {
+            enqueueUniqueWork(
+                "immediate_retry",
+                ExistingWorkPolicy.REPLACE,
+                immediateRetry
+            )
+            enqueueUniquePeriodicWork(
+                "periodic_retry",
+                ExistingPeriodicWorkPolicy.UPDATE,
+                periodicRetry
+            )
+        }
     }
 
     fun saveVoucher(voucher: VoucherData, onLog: (String) -> Unit) {
-        // Validate data before attempting connection
         if (voucher.cardId.isBlank()) {
             onLog("Error: Invalid card ID - Cannot be empty")
             return
@@ -60,7 +101,6 @@ class DatabaseHelper(context: Context) {
             try {
                 connection = DriverManager.getConnection(dbUrl, dbUser, dbPassword)
 
-                // First check if transaction already exists
                 val checkSql = """
                     SELECT COUNT(*) FROM Vouchers 
                     WHERE transaction_id = ?
@@ -80,7 +120,6 @@ class DatabaseHelper(context: Context) {
                     return@launch
                 }
 
-                // If not exists, proceed with insert
                 val insertSql = """
                     INSERT INTO Vouchers (transaction_id, card_id, amount, used, created_at)
                     VALUES (?, ?, ?, false, CURRENT_TIMESTAMP)
@@ -95,16 +134,21 @@ class DatabaseHelper(context: Context) {
                     onLog("Transaction saved successfully - ID: ${voucher.transactionId}")
                 }
             } catch (e: SQLException) {
-                // If it's a duplicate key error, treat it as a success
                 if (e.message?.contains("duplicate key value") == true) {
                     onLog("Transaction already exists in database - ID: ${voucher.transactionId}")
                 } else {
                     onLog("Database error: ${e.message}")
                     Log.e("DatabaseHelper", "Database error", e)
+                    localDb.savePendingVoucher(voucher)
+                    onLog("Transaction saved to local backup - Will retry shortly")
+                    scheduleRetryWorker() // Schedule immediate retry
                 }
             } catch (e: Exception) {
                 onLog("Error: ${e.message}")
                 Log.e("DatabaseHelper", "Save error", e)
+                localDb.savePendingVoucher(voucher)
+                onLog("Transaction saved to local backup - Will retry shortly")
+                scheduleRetryWorker() // Schedule immediate retry
             } finally {
                 try {
                     connection?.close()

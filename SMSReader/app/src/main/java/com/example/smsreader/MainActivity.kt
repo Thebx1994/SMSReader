@@ -30,6 +30,8 @@ import androidx.compose.ui.graphics.Color
 import android.os.Build
 import com.example.smsreader.data.DatabaseHelper
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
@@ -41,13 +43,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val logEntries = mutableStateListOf<LogEntry>()
     private lateinit var databaseHelper: DatabaseHelper
+    private lateinit var viewModel: MainViewModel
 
     private val logReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             intent?.getStringExtra(SmsMonitorService.EXTRA_LOG_MESSAGE)?.let { message ->
-                logEntries.add(0, LogEntry(message))
+                viewModel.addLogEntry(LogEntry(message))
             }
         }
     }
@@ -57,6 +59,7 @@ class MainActivity : ComponentActivity() {
         checkPermissions()
         registerLogReceiver()
         databaseHelper = DatabaseHelper(this)
+        viewModel = MainViewModel()
 
         setContent {
             SMSReaderTheme {
@@ -73,8 +76,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onSaveDbCredentials = { url, user, password ->
                             databaseHelper.saveCredentials(url, user, password)
-                        },
-                        logEntries = logEntries
+                        }
                     )
                 }
             }
@@ -134,15 +136,16 @@ fun MainScreen(
     onStartMonitoring: (String, String) -> Unit,
     onStopMonitoring: () -> Unit,
     onSaveDbCredentials: (String, String, String) -> Unit,
-    logEntries: List<LogEntry> = emptyList()
+    viewModel: MainViewModel = viewModel()
 ) {
-    var username by remember { mutableStateOf("") }
-    var searchString by remember { mutableStateOf("") }
-    var isMonitoring by remember { mutableStateOf(false) }
-    var showDbSettings by remember { mutableStateOf(false) }
-    var dbUrl by remember { mutableStateOf("") }
-    var dbUser by remember { mutableStateOf("") }
-    var dbPassword by remember { mutableStateOf("") }
+    val username by viewModel.username.collectAsStateWithLifecycle()
+    val searchString by viewModel.searchString.collectAsStateWithLifecycle()
+    val isMonitoring by viewModel.isMonitoring.collectAsStateWithLifecycle()
+    val showDbSettings by viewModel.showDbSettings.collectAsStateWithLifecycle()
+    val dbUrl by viewModel.dbUrl.collectAsStateWithLifecycle()
+    val dbUser by viewModel.dbUser.collectAsStateWithLifecycle()
+    val dbPassword by viewModel.dbPassword.collectAsStateWithLifecycle()
+    val logEntries by viewModel.logEntries.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -152,14 +155,14 @@ fun MainScreen(
     ) {
         OutlinedTextField(
             value = username,
-            onValueChange = { username = it },
+            onValueChange = { viewModel.updateUsername(it) },
             label = { Text("Sender Name") },
             modifier = Modifier.fillMaxWidth()
         )
 
         OutlinedTextField(
             value = searchString,
-            onValueChange = { searchString = it },
+            onValueChange = { viewModel.updateSearchString(it) },
             label = { Text("Search String") },
             modifier = Modifier.fillMaxWidth()
         )
@@ -175,7 +178,7 @@ fun MainScreen(
                     } else {
                         onStartMonitoring(username, searchString)
                     }
-                    isMonitoring = !isMonitoring
+                    viewModel.toggleMonitoring()
                 },
                 modifier = Modifier.weight(1f)
             ) {
@@ -185,7 +188,7 @@ fun MainScreen(
             Spacer(modifier = Modifier.width(8.dp))
 
             Button(
-                onClick = { showDbSettings = !showDbSettings },
+                onClick = { viewModel.toggleDbSettings() },
                 modifier = Modifier.weight(1f)
             ) {
                 Text(if (showDbSettings) "Hide DB Settings" else "Show DB Settings")
@@ -195,21 +198,21 @@ fun MainScreen(
         if (showDbSettings) {
             OutlinedTextField(
                 value = dbUrl,
-                onValueChange = { dbUrl = it },
+                onValueChange = { viewModel.updateDbUrl(it) },
                 label = { Text("Database URL") },
                 modifier = Modifier.fillMaxWidth()
             )
 
             OutlinedTextField(
                 value = dbUser,
-                onValueChange = { dbUser = it },
+                onValueChange = { viewModel.updateDbUser(it) },
                 label = { Text("Database User") },
                 modifier = Modifier.fillMaxWidth()
             )
 
             OutlinedTextField(
                 value = dbPassword,
-                onValueChange = { dbPassword = it },
+                onValueChange = { viewModel.updateDbPassword(it) },
                 label = { Text("Database Password") },
                 modifier = Modifier.fillMaxWidth(),
                 visualTransformation = PasswordVisualTransformation()
@@ -218,7 +221,7 @@ fun MainScreen(
             Button(
                 onClick = {
                     onSaveDbCredentials(dbUrl, dbUser, dbPassword)
-                    showDbSettings = false
+                    viewModel.toggleDbSettings()
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
